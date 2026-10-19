@@ -1,8 +1,13 @@
-# Tunebar
+<p align="center">
+  <img src="Resources/icon.png" width="128" alt="Tunebar icon">
+</p>
 
-YouTube Music in your Mac's menu bar. Native SwiftUI, Liquid Glass, your own account.
+<h1 align="center">Tunebar</h1>
 
-**[Download the latest release](https://github.com/sameetvipat/tunebar/releases/latest)** · macOS 26 or later
+<p align="center">
+  YouTube Music in your Mac's menu bar. Native SwiftUI, Liquid Glass, your own account.<br>
+  <b><a href="https://github.com/sameetvipat/tunebar/releases/latest">Download the latest release</a></b> · macOS 26 or later
+</p>
 
 ## Install
 
