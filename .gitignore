@@ -1,0 +1,4 @@
+.build/
+Tunebar.app/
+dist/
+.DS_Store
