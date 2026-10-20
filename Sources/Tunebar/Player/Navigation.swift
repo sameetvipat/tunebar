@@ -7,8 +7,8 @@ extension Player {
     private var root: [Page] { stack.first.map { $0.isHome ? [$0] : [] } ?? [] }
 
     func loadHome() async {
-        isLoading = true
-        defer { isLoading = false }
+        beginLoading()
+        defer { endLoading() }
         guard await waitUntilReady() else {
             errorMessage = "YouTube Music didn't load. Try Reload from the right-click menu."
             return
@@ -25,9 +25,19 @@ extension Player {
         }
     }
 
+    /// Opens home, or, when it's already showing, fetches a fresh feed and fades it in at the top.
     func goHome() {
+        _ = beginNavigation()
         lastQuery = ""
-        if root.isEmpty {
+        if current?.isHome == true {
+            guard !refreshingHome else { return }
+            refreshingHome = true
+            Task {
+                await loadHome()
+                refreshingHome = false
+                if current?.isHome == true { show(root) } // unless you've gone elsewhere meanwhile
+            }
+        } else if root.isEmpty {
             show([])
             Task { await loadHome() }
         } else {
@@ -37,14 +47,16 @@ extension Player {
 
     /// Opens a library tab. Tabs replace each other rather than stacking up.
     func openLibrary(_ tab: LibraryTab = .playlists) async {
-        isLoading = true
-        defer { isLoading = false }
+        let request = beginNavigation()
+        beginLoading()
+        defer { endLoading() }
         guard await waitUntilReady() else { return }
         do {
             guard var page = try await bridge(Page.self, "browse", tab.browseId, 3, tab.rawValue) else { return }
             page.libraryTab = tab
             if !page.playsAsList { page.playlistId = nil }
             if tab == .songs { page.items.removeAll { $0.videoId == nil } } // its "Shuffle all" row; Shuffle All covers it
+            guard isLatest(request) else { return }
             show(root + [page])
             errorMessage = nil
         } catch {
@@ -59,14 +71,18 @@ extension Player {
         guard query != lastQuery else { return }
         lastQuery = query
         guard !query.isEmpty else { return }
-        isLoading = true
-        defer { isLoading = false }
+        let request = beginNavigation()
+        beginLoading()
+        defer { endLoading() }
         do {
+            async let related = try? bridge([String].self, "searchSuggestions", query)
             guard var page = try await bridge(Page.self, "search", query) else {
                 lastQuery = "" // cancelled (popover closed or typing continued): allow a retry
                 return
             }
             page.query = query
+            page.suggestions = (await related ?? nil)?.filter { $0.caseInsensitiveCompare(query) != .orderedSame }
+            guard isLatest(request) else { return }
             show(root + [page])
             errorMessage = nil
         } catch {
@@ -79,7 +95,27 @@ extension Player {
 
     func browse(_ item: SearchItem) async {
         guard let id = item.browseId else { return }
-        await browse(id: id, pageType: item.pageType, title: item.title, thumbnail: item.thumbnail)
+        await browse(id: id, pageType: item.pageType, title: item.title, thumbnail: item.thumbnail,
+                     params: item.params)
+    }
+
+    /// Explore: new releases, charts, moods & genres. Replaces whatever is above home, like the library.
+    func openExplore() async {
+        let request = beginNavigation()
+        beginLoading()
+        defer { endLoading() }
+        guard await waitUntilReady() else { return }
+        do {
+            guard var page = try await bridge(Page.self, "browse", "FEmusic_explore", 1) else { return }
+            page.pageType = Page.exploreType
+            page.browseId = "FEmusic_explore"
+            page.title = nil // its sections say what's what
+            guard isLatest(request) else { return }
+            show(root + [page])
+            errorMessage = nil
+        } catch {
+            errorMessage = "Couldn't load Explore: \(Self.describe(error))"
+        }
     }
 
     /// Opens a browse page.
@@ -89,14 +125,18 @@ extension Player {
     ///   - asList: Show it as a plain list titled `title` (a "See all" page) rather than with a header.
     func browse(id: String, pageType: String?, title: String, thumbnail: String? = nil,
                 params: String? = nil, asList: Bool = false) async {
-        isLoading = true
-        defer { isLoading = false }
+        let request = beginNavigation()
+        beginLoading()
+        defer { endLoading() }
         do {
             // Long playlists arrive in pages; follow them so editing sees every track.
             guard var page = try await bridge(Page.self, "browse", id, 20, asList ? title : "Songs", params ?? "")
             else { return }
             page.browseId = id
             page.pageType = pageType
+            // Only albums, playlists and artists (shuffle) play as a whole. A creator's profile has no
+            // list of its own; the bridge's fallback would pick whichever playlist is listed first.
+            if ![PageType.album, PageType.playlist, PageType.artist].contains(pageType) { page.playlistId = nil }
             if asList {
                 page.title = nil
                 page.filterName = title
@@ -105,6 +145,7 @@ extension Player {
                 page.title = title
             }
             if page.thumbnail == nil { page.thumbnail = thumbnail }
+            guard isLatest(request) else { return }
             push(page)
             errorMessage = nil
             let tracks = page.items.compactMap(\.videoId)
@@ -133,12 +174,14 @@ extension Player {
             return
         }
         guard let query = page.query, let params = page.filters?[section] else { return }
-        isLoading = true
-        defer { isLoading = false }
+        let request = beginNavigation()
+        beginLoading()
+        defer { endLoading() }
         do {
             guard var all = try await bridge(Page.self, "search", query, params, 4, section) else { return }
             all.query = query
             all.filterName = section
+            guard isLatest(request) else { return }
             push(all)
             errorMessage = nil
         } catch {

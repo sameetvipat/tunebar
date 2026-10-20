@@ -48,6 +48,14 @@ struct QueueView: View {
                         }
                         QueueRow(item: item, isPlaying: !player.isPaused, player: player, ui: ui)
                             .id(item.index)
+                            // Your queued songs can be dragged into a new order (autoplay's can't).
+                            .draggable(String(item.index)) { QueueRow(item: item, isPlaying: false, player: player, ui: ui).frame(width: 320) }
+                            .dropDestination(for: String.self) { dropped, _ in
+                                guard let index = dropped.first.flatMap(Int.init),
+                                      let moved = player.queue.first(where: { $0.index == index }) else { return false }
+                                player.moveQueueItem(moved, to: item)
+                                return true
+                            }
                             .contextMenu {
                                 if !item.selected {
                                     Button(role: .destructive) { player.removeFromQueue(item) } label: {
@@ -58,8 +66,8 @@ struct QueueView: View {
                     }
                 }
                 .padding(.bottom, 8)
+                .overlayScrollers()
             }
-            .onScrollGeometryChange(for: Bool.self, of: PageView.isScrolled) { ui.contentScrolled = $1 }
             .onDisappear { player.queue = [] } // reloaded whenever Up Next opens
             .task(id: player.videoId) {
                 // Load now and again once the page has caught up with a track change.

@@ -10,6 +10,8 @@ struct ResultRow: View {
     let page: Page
     @ObservedObject var player: Player
     @ObservedObject var ui: UIState
+    /// On album pages: shown in place of the artwork.
+    var trackNumber: Int? = nil
 
     private var hovered: Bool { ui.hoveredID == item.id }
     private var selected: Bool { ui.selection.contains(item.id) }
@@ -19,15 +21,25 @@ struct ResultRow: View {
             if ui.isSelecting {
                 SelectionMark(selected: selected, enabled: ui.selectable.contains(item.id))
             }
-            Artwork(url: item.thumbnail, size: 44, circle: item.isArtist)
-                .overlay {
-                    if hovered && !ui.isSelecting { ArtworkPlayButton(item: item, size: 26, player: player) }
-                }
+            if let trackNumber {
+                TrackNumber(number: trackNumber, item: item, hovered: hovered && !ui.isSelecting, player: player)
+            } else {
+                Artwork(url: item.thumbnail, size: 44, circle: item.isArtist)
+                    .overlay {
+                        if hovered && !ui.isSelecting { ArtworkPlayButton(item: item, size: 26, player: player) }
+                    }
+            }
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.title).lineLimit(1)
+                Text(item.title).lineLimit(item.description == nil ? 1 : 2)
                 LinkedSubtitle(item: item, player: player)
+                if let description = item.description { // podcast episodes
+                    Text(description).font(.caption).foregroundStyle(.tertiary).lineLimit(2)
+                }
             }
             Spacer(minLength: 4)
+            if item.isQueueable && !ui.isSelecting {
+                QueueButton(item: item, player: player).opacity(hovered ? 1 : 0)
+            }
             if let videoId = item.videoId, !ui.isSelecting {
                 RatingButtons(rating: item.likeStatus ?? .none, hovered: hovered) {
                     player.setRating(videoId, $0, item: item)
@@ -57,6 +69,7 @@ struct ResultRow: View {
             if inside { ui.hoveredID = item.id } else if ui.hoveredID == item.id { ui.hoveredID = nil }
         }
         .contextMenu { ItemMenuItems(item: item, page: page, player: player, ui: ui) }
+        .animation(.quick, value: hovered)
     }
 }
 
@@ -82,6 +95,11 @@ struct CardItem: View {
                         ArtworkPlayButton(item: item, size: 36, player: player).padding(8)
                     }
                 }
+                .overlay(alignment: .bottomLeading) {
+                    if ui.hoveredID == item.id && !ui.isSelecting && item.isQueueable {
+                        QueueButton(item: item, player: player, size: 28).padding(8)
+                    }
+                }
             Text(item.title).lineLimit(2).multilineTextAlignment(.leading)
             LinkedSubtitle(item: item, player: player)
         }
@@ -92,6 +110,7 @@ struct CardItem: View {
             if inside { ui.hoveredID = item.id } else if ui.hoveredID == item.id { ui.hoveredID = nil }
         }
         .contextMenu { ItemMenuItems(item: item, page: page, player: player, ui: ui) }
+        .animation(.quick, value: ui.hoveredID == item.id)
     }
 }
 
@@ -105,7 +124,8 @@ private func tap(_ item: SearchItem, player: Player, ui: UIState) {
     }
 }
 
-/// A song's like and dislike (in that order), as small buttons. A rating that's set always shows; both show on hover.
+/// A song's like and dislike (in that order), as small buttons. The like is always there, filled once
+/// liked; the dislike shows on hover, or once disliked.
 struct RatingButtons: View {
     let rating: Rating
     let hovered: Bool
@@ -113,13 +133,11 @@ struct RatingButtons: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            if hovered || rating == .like {
-                Button { rate(rating == .like ? .none : .like) } label: {
-                    Image(systemName: Rating.likeSymbol(filled: rating == .like))
-                        .foregroundStyle(rating == .like ? Color.primary : Color.secondary)
-                }
-                .help(rating == .like ? "Remove from Liked Songs" : "Like")
+            Button { rate(rating == .like ? .none : .like) } label: {
+                Image(systemName: Rating.likeSymbol(filled: rating == .like))
+                    .foregroundStyle(rating == .like ? Color.primary : Color.secondary)
             }
+            .help(rating == .like ? "Remove from Liked Songs" : "Like")
             if hovered || rating == .dislike {
                 Button { rate(rating == .dislike ? .none : .dislike) } label: {
                     Image(systemName: Rating.dislikeSymbol(filled: rating == .dislike))
@@ -131,6 +149,33 @@ struct RatingButtons: View {
         .font(.callout)
         .foregroundStyle(.secondary)
         .contentTransition(.symbolEffect(.replace))
+    }
+}
+
+/// An album track's number, as Apple Music shows it: ▶ on hover, a waveform while it's playing.
+private struct TrackNumber: View {
+    let number: Int
+    let item: SearchItem
+    let hovered: Bool
+    @ObservedObject var player: Player
+
+    private var isCurrent: Bool { item.videoId != nil && item.videoId == player.videoId }
+
+    var body: some View {
+        Group {
+            if hovered {
+                Button { player.select(item) } label: { Image(systemName: "play.fill") }
+                    .buttonStyle(.plain)
+                    .help("Play")
+            } else if isCurrent {
+                Image(systemName: "waveform")
+                    .foregroundStyle(Color.accentColor)
+                    .symbolEffect(.variableColor.iterative, isActive: !player.isPaused)
+            } else {
+                Text("\(number)").monospacedDigit().foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 28, height: 36) // narrower than artwork; rows stay the same height
     }
 }
 
@@ -165,6 +210,35 @@ struct ArtworkPlayButton: View {
     }
 }
 
+/// Add to Queue in one click, for a song or a whole album/playlist (Play Next is in the ⋯ menu).
+/// With `size`, a glass circle for laying over artwork; without, a plain glyph for rows.
+struct QueueButton: View {
+    let item: SearchItem
+    let player: Player
+    var size: CGFloat? = nil
+
+    var body: some View {
+        Button {
+            player.enqueue(videoId: item.videoId, playlistId: item.videoId == nil ? item.playlistId : nil, playNext: false)
+        } label: {
+            if let size {
+                Image(systemName: "text.line.last.and.arrowtriangle.forward")
+                    .font(.system(size: size * 0.42, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: size, height: size)
+                    .background(Circle().fill(.black.opacity(0.35)))
+                    .glassEffect(.regular.interactive(), in: Circle())
+                    .contentShape(Circle())
+            } else {
+                Image(systemName: "text.line.last.and.arrowtriangle.forward")
+            }
+        }
+        .buttonStyle(.borderless)
+        .help("Add to Queue")
+        .transition(.opacity)
+    }
+}
+
 /// Select mode's checkbox. Items the page can't remove (e.g. suggestions) show it dimmed.
 struct SelectionMark: View {
     let selected: Bool
@@ -177,6 +251,19 @@ struct SelectionMark: View {
             .background(Circle().fill(.background).padding(2))
             .opacity(enabled ? 1 : 0.3)
             .contentTransition(.symbolEffect(.replace))
+    }
+}
+
+/// Marks the playing item as an ad: track skipping and seeking are off until it ends.
+struct AdBadge: View {
+    var body: some View {
+        Text("Ad")
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(.black)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Color.yellow, in: Capsule())
+            .help("Ad: skipping is off until it ends")
     }
 }
 
@@ -227,6 +314,26 @@ struct LinkedSubtitle: View {
 
 /// Remote artwork, square with rounded corners or round for artists. Asks for the image at the
 /// size it's shown, so a 44 pt thumbnail doesn't download and decode a 1200-pixel cover.
+/// The playing track's artwork at whatever size it's given, for the artwork that grows and shrinks
+/// between the card and Now Playing (see Hero). Sized by its container, so place it inside a frame.
+struct HeroArtwork: View {
+    let image: NSImage?
+    var cornerRadius: CGFloat = 8
+
+    var body: some View {
+        Color.secondary.opacity(0.2)
+            .overlay {
+                if let image {
+                    Image(nsImage: image).resizable().scaledToFill()
+                        .transition(.opacity)
+                        .id(image) // the next track's artwork cross-fades in
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .animation(.quick, value: image)
+    }
+}
+
 struct Artwork: View {
     let url: URL?
     let size: CGFloat
@@ -243,10 +350,12 @@ struct Artwork: View {
     }
 
     var body: some View {
-        AsyncImage(url: Self.sized(url, points: size)) { image in
-            image.resizable().scaledToFill()
-        } placeholder: {
-            Color.secondary.opacity(0.2)
+        AsyncImage(url: Self.sized(url, points: size), transaction: Transaction(animation: .quick)) { phase in
+            if let image = phase.image {
+                image.resizable().scaledToFill().transition(.opacity) // fades in once loaded
+            } else {
+                Color.secondary.opacity(0.2)
+            }
         }
         .frame(width: size, height: size)
         .clipShape(circle ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 6)))

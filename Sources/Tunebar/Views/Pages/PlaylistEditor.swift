@@ -79,6 +79,7 @@ struct PlaylistEditor: View {
                 .onMove { player.moveTrack(from: $0, to: $1) }
             }
             .listStyle(.plain)
+            .scrollIndicators(.hidden) // no scroll bar strip narrowing the rows
             .scrollContentBackground(.hidden)
         }
     }

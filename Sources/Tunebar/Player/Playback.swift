@@ -42,8 +42,15 @@ extension Player {
             address.queryItems = [("v", videoId), ("list", playlistId)].compactMap { name, value in
                 value.map { URLQueryItem(name: name, value: $0) }
             }
-            webView.load(URLRequest(url: address.url!))
+            await loadPage(address.url!)
         }
+    }
+
+    /// Plays an album or playlist in shuffled order, as YouTube Music's own Shuffle does (its params
+    /// mark the request as shuffled).
+    func playShuffled(playlistId: String) {
+        play(videoId: nil, playlistId: playlistId,
+             endpoint: #"{"watchPlaylistEndpoint":{"playlistId":"\#(playlistId)","params":"wAEB8gECKAE%3D"}}"#)
     }
 
     /// Plays an album or playlist without opening it. Cards that carry no playable list (some home
@@ -70,8 +77,18 @@ extension Player {
     // MARK: Transport
 
     func togglePlay() { control("toggle") }
-    func next() { control("next") }
-    func previous() { control("previous") }
+    func skipAd() { control("skipAd") }
+    /// Shuffles what's queued after the current song.
+    func shuffle() {
+        control("shuffle")
+        showToast("Shuffled")
+    }
+    /// Off → all → one → off, as YouTube Music's own button does.
+    func cycleRepeat() { control("repeat") }
+    /// Switches between the song and its music video, for tracks that have both.
+    func setVideoVersion(_ video: Bool) { control("videoVersion", video ? 1 : 0) }
+    func next() { if !isAd { control("next") } }
+    func previous() { if !isAd { control("previous") } }
 
     func seek(to seconds: Double) {
         clock.time = seconds
@@ -140,10 +157,5 @@ extension Player {
     func openCurrentPlaylist() {
         guard hasCurrentPlaylist else { return }
         open(id: "VL" + currentListId, pageType: PageType.playlist, title: "Playlist")
-    }
-
-    /// What the artwork opens: the playlist it plays from, else its album.
-    func openCurrentCollection() {
-        if hasCurrentPlaylist { openCurrentPlaylist() } else { openCurrentAlbum() }
     }
 }

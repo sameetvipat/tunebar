@@ -12,7 +12,13 @@ extension Player {
 
     func playQueueItem(_ item: QueueItem) {
         Task {
-            _ = try? await bridge("queuePlay", item.videoId, item.occurrence)
+            do {
+                try await bridge("queuePlay", item.videoId, item.occurrence)
+            } catch {
+                Log.write("queuePlay failed: \(Self.describe(error))")
+                showToast("Couldn't play that: \(Self.describe(error))")
+                return
+            }
             try? await Task.sleep(for: .milliseconds(600)) // let the page mark the new track
             await loadQueue()
         }
@@ -20,7 +26,21 @@ extension Player {
 
     func removeFromQueue(_ item: QueueItem) {
         Task {
-            _ = try? await bridge("queueRemove", item.autoplay, item.storeIndex)
+            do {
+                try await bridge("queueRemove", item.autoplay, item.storeIndex)
+            } catch {
+                Log.write("queueRemove failed: \(Self.describe(error))")
+                showToast("Couldn't remove that: \(Self.describe(error))")
+            }
+            await loadQueue()
+        }
+    }
+
+    /// Moves one of your queued songs to where another one is (both from your queue, not autoplay).
+    func moveQueueItem(_ item: QueueItem, to target: QueueItem) {
+        guard !item.autoplay, !target.autoplay, item.storeIndex != target.storeIndex else { return }
+        Task {
+            _ = try? await bridge("queueMove", item.storeIndex, target.storeIndex)
             await loadQueue()
         }
     }
@@ -47,9 +67,17 @@ extension Player {
     /// With nothing playing there's no queue to add to, so it just plays.
     func enqueue(videoId: String?, playlistId: String?, playNext: Bool) {
         Task {
-            let added = try? await bridge("enqueue", videoId ?? "", playlistId ?? "", playNext)
-            guard (added as? Bool) == true else {
-                play(videoId: videoId, playlistId: playlistId)
+            let added: Bool
+            do {
+                added = try await bridge("enqueue", videoId ?? "", playlistId ?? "", playNext) as? Bool == true
+            } catch {
+                Log.write("enqueue failed: \(Self.describe(error))")
+                added = false
+            }
+            guard added else {
+                // Only start it when there's nothing to interrupt.
+                if self.videoId.isEmpty { play(videoId: videoId, playlistId: playlistId) }
+                else { showToast("Couldn't add to the queue") }
                 return
             }
             showToast(playNext ? "Playing next" : "Added to queue")

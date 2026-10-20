@@ -2,9 +2,9 @@
 # Builds the app and wraps it in dist/Tunebar-<version>.dmg: the app plus an Applications shortcut to
 # drag it onto, with the app's icon on both the mounted disk and the .dmg file.
 set -e
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
-./build.sh
+Scripts/build.sh
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Tunebar.app/Contents/Info.plist)
 WORK=$(mktemp -d)

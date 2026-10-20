@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Builds Tunebar.app (release) from the Swift package, without Xcode.
 set -e
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 swift build -c release
 
@@ -30,6 +30,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>NSHumanReadableCopyright</key><string>Not affiliated with Google or YouTube.</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>LSUIElement</key><true/>
 </dict>

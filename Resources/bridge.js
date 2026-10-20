@@ -179,6 +179,36 @@
     };
   };
 
+  /** A coloured Moods & Genres tile (Explore's New releases / Charts buttons too): opens a page. */
+  const navigationButton = it => {
+    const b = (it.clickCommand && it.clickCommand.browseEndpoint) || {};
+    const argb = it.solid && it.solid.leftStripeColor;
+    return {
+      style: 'category',
+      title: text(it.buttonText),
+      subtitle: '',
+      color: argb ? '#' + (argb >>> 0).toString(16).padStart(8, '0').slice(2) : null, // ARGB → #RRGGBB
+      browseId: b.browseId || null,
+      params: b.params || null,
+      pageType: browseInfo({ browseEndpoint: b }).pageType
+    };
+  };
+
+  /** A podcast episode: plays like a video; its subtitle links to the show. */
+  const episodeItem = it => {
+    const watch = find(it.overlay, 'watchEndpoint') || find(it.onTap, 'watchEndpoint');
+    return {
+      style: 'row',
+      title: text(it.title),
+      subtitle: text(it.subtitle),
+      thumbnail: thumb(it.thumbnail),
+      description: text(it.description) || null,
+      videoId: (watch && watch.videoId) || null,
+      playEndpoint: watch ? endpointJSON({ watchEndpoint: watch }) : null,
+      ...linksOf([it.subtitle && it.subtitle.runs])
+    };
+  };
+
   /**
    * Walks a response, calling add(item, sectionTitle) for every row/card it finds and
    * more(sectionTitle, browseEndpoint) for shelves that have a "See all" page.
@@ -210,6 +240,13 @@
       return;
     }
     if (o.musicPlaylistShelfRenderer) { walk(o.musicPlaylistShelfRenderer.contents, section, add, more); return; }
+    if (o.gridRenderer) { // a titled grid, e.g. Moods & Genres' "Genres"
+      const header = o.gridRenderer.header && o.gridRenderer.header.gridHeaderRenderer;
+      walk(o.gridRenderer.items, (header && text(header.title)) || section, add, more);
+      return;
+    }
+    if (o.musicNavigationButtonRenderer) { add(navigationButton(o.musicNavigationButtonRenderer), section); return; }
+    if (o.musicMultiRowListItemRenderer) { add(episodeItem(o.musicMultiRowListItemRenderer), section); return; }
     if (o.musicResponsiveListItemRenderer) { add(listItem(o.musicResponsiveListItemRenderer), section); return; }
     if (o.musicTwoRowItemRenderer) { add(twoRowItem(o.musicTwoRowItemRenderer), section); return; }
     if (o.musicResponsiveHeaderRenderer || o.musicImmersiveHeaderRenderer) return; // parsed separately
@@ -226,7 +263,8 @@
     return {
       items,
       add(item, section) {
-        const key = item.setVideoId || item.videoId || item.playlistId || item.browseId;
+        // Category tiles all open the same page, told apart by their params.
+        const key = item.setVideoId || item.videoId || item.playlistId || (item.browseId && item.browseId + (item.params || ''));
         if (!item.title || !key) return; // e.g. the "New playlist" tile
         item.section = section;
         item.id = section + '|' + key;
@@ -352,7 +390,7 @@
     const c = collector();
     const add = (item, section) => {
       if (!item.thumbnail) item.thumbnail = headerThumb; // album tracks have no artwork of their own
-      c.add(item, section || defaultSection);
+      c.add(item, section || (item.style === 'category' ? 'Browse' : defaultSection));
     };
     const more = {};
     walk(json.contents, null, add, (title, b) => {
@@ -373,6 +411,7 @@
     // Albums and playlists keep it in a description shelf; artist headers carry plain text.
     const shelf = h.description && h.description.musicDescriptionShelfRenderer;
     const description = shelf ? text(shelf.description) : text(h.description);
+    const subscription = find(h, 'subscribeButtonRenderer'); // artists
     return JSON.stringify({
       title: text(h.title) || null,
       subtitle: text(h.subtitle) || null,     // e.g. "EP • 2009"
@@ -382,6 +421,9 @@
       owned: !!editable,
       privacy: (edit && edit.privacy) || null,
       description: description || null,
+      channelId: (subscription && subscription.channelId) || null,
+      subscribed: subscription ? !!subscription.subscribed : null,
+      subscribers: (subscription && text(subscription.subscriberCountText)) || null,
       more,
       ...pageOwner(h),
       ...(((h.buttons || []).map(b => libraryToggle(b.toggleButtonRenderer)).find(Boolean)) || {}),
@@ -412,6 +454,79 @@
       if (released || label) return JSON.stringify({ released, label });
     }
     return JSON.stringify({ released: null, label: null });
+  };
+
+  // MARK: - Account
+
+  /** The signed-in account's name, handle, photo and channel (its "Your channel" link), from the
+   *  account menu. Null when signed out. */
+  const account = async () => {
+    const menu = await api('account/account_menu', {});
+    const header = find(menu, 'activeAccountHeaderRenderer');
+    if (!header) return JSON.stringify(null);
+    const photos = (header.accountPhoto && header.accountPhoto.thumbnails) || [];
+    return JSON.stringify({
+      name: text(header.accountName) || 'Your account',
+      handle: text(header.channelHandle) || null,
+      photo: photos.length ? photos[photos.length - 1].url : null,
+      channelId: (findAll(menu, 'navigationEndpoint').map(browseInfo)
+        .find(b => b.browseId && b.browseId.startsWith('UC')) || {}).browseId || null
+    });
+  };
+
+  // MARK: - Search suggestions
+
+  /** What YouTube Music suggests for a partly typed search, as plain queries. */
+  const searchSuggestions = async input => {
+    const json = await api('music/get_search_suggestions', { input });
+    return JSON.stringify(findAll(json, 'searchSuggestionRenderer')
+      .map(s => (find(s, 'searchEndpoint') || {}).query || text(s.suggestion))
+      .filter(Boolean).slice(0, 6));
+  };
+
+  // MARK: - Lyrics
+
+  /**
+   * A song's lyrics, time-synced where YouTube Music has them (from Musixmatch). Its lyrics page is
+   * found through the "next" request's Lyrics tab. The web client gets that page as plain text; the
+   * Android app's client also gets each line's start time, so it's asked first. Resolves to
+   * {lines: [{time, text}], text, source}: lines empty when not synced, text null too without lyrics.
+   */
+  const lyrics = async videoId => {
+    const next = await api('next', { videoId });
+    const tabs = (find(next, 'watchNextTabbedResultsRenderer') || {}).tabs || [];
+    const tab = tabs.map(t => t.tabRenderer)
+      .find(t => t && browseInfo(t.endpoint).pageType === 'MUSIC_PAGE_TYPE_TRACK_LYRICS');
+    const none = JSON.stringify({ lines: [], text: null, source: null });
+    if (!tab || tab.unselectable) return none;
+    const browseId = browseInfo(tab.endpoint).browseId;
+
+    const context = ytcfg.get('INNERTUBE_CONTEXT');
+    try {
+      const response = await fetch('/youtubei/v1/browse?prettyPrint=false', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          context: { ...context, client: { ...context.client, clientName: 'ANDROID_MUSIC',
+                                           clientVersion: '7.21.50', androidSdkVersion: 34 } },
+          browseId
+        })
+      });
+      const android = await response.json();
+      const timed = find(android, 'timedLyricsData') || [];
+      const lines = timed
+        .map(l => ({ time: Number((l.cueRange || {}).startTimeMilliseconds || 0) / 1000, text: l.lyricLine || '' }))
+        .filter(l => isFinite(l.time));
+      if (lines.length) {
+        return JSON.stringify({ lines, text: lines.map(l => l.text).join('\n'), source: text(find(android, 'sourceMessage')) || null });
+      }
+    } catch (e) { /* fall back to plain lyrics */ }
+
+    const page = await api('browse', { browseId });
+    const shelf = find(page, 'musicDescriptionShelfRenderer');
+    const plain = shelf && text(shelf.description);
+    if (!plain) return none;
+    return JSON.stringify({ lines: [], text: plain, source: (shelf && text(shelf.footer)) || null });
   };
 
   // MARK: - Account actions
@@ -576,6 +691,14 @@
    * or at the end of your queue (before the autoplay mix), as the web app's menu does.
    * False when nothing is playing, so Swift plays it instead.
    */
+  /** Moves one of your queued songs (indexes into the queue's own list, not autoplay's). */
+  const queueMove = (fromIndex, toIndex) => {
+    const q = queueElement();
+    if (!q || !q.dispatch) return false;
+    q.dispatch({ type: 'MOVE_ITEM', payload: { fromIndex, toIndex } });
+    return true;
+  };
+
   const enqueue = async (videoId, playlistId, playNext) => {
     const q = queueElement();
     const playing = nowPlayingId();
@@ -646,10 +769,102 @@
         if (p && p.setVolume) { p.setVolume(value); if (value > 0 && p.isMuted && p.isMuted()) p.unMute(); }
         else if (video) { video.volume = value / 100; video.muted = value === 0; }
         break;
+      case 'videoVersion': { // 1 the music video, 0 the song
+        const t = avToggle();
+        const b = t && t.querySelector(value ? '.video-button' : '.song-button');
+        if (b) b.click();
+        break;
+      }
+      case 'shuffle': click('.shuffle'); break;   // shuffles what's queued after the current song
+      case 'repeat': click('.repeat'); break;     // off → all → one → off
+      case 'skipAd': { const b = skipAdButton(); if (b) b.click(); break; } // only when the page offers it
       case 'mute': // 1 mutes, 0 unmutes
         if (p && p.mute) { value ? p.mute() : p.unMute(); } else if (video) video.muted = !!value;
         break;
     }
+  };
+
+  /** Whether an ad is playing, and whether the page currently offers to skip it. */
+  const skipAdButton = () => [...document.querySelectorAll('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button')]
+    .find(b => b.offsetParent !== null);
+  const adState = () => {
+    const p = player();
+    const bar = document.querySelector('ytmusic-player-bar');
+    return {
+      ad: !!((p && p.classList.contains('ad-showing')) || (bar && bar.hasAttribute('is-advertisement'))),
+      adSkippable: !!skipAdButton()
+    };
+  };
+
+  /** The page's Song / Video switch, shown for tracks that have both versions. */
+  const avToggle = () => {
+    const t = document.querySelector('ytmusic-av-toggle');
+    return t && !t.hidden && !t.hasAttribute('toggle-disabled') && getComputedStyle(t).display !== 'none' ? t : null;
+  };
+  /** Whether the playing track has any picture worth a Video tab: a song ("ATV") is a still of its
+   *  cover unless it also has a music video. Unknown types count as video. */
+  const avState = () => {
+    const t = avToggle();
+    const response = fromPlayer('getPlayerResponse');
+    const type = response && response.videoDetails && response.videoDetails.musicVideoType;
+    return {
+      hasVideoVersion: !!t,
+      videoVersion: !!t && t.getAttribute('playback-mode') === 'OMV_PREFERRED',
+      hasVideo: !!t || type !== 'MUSIC_VIDEO_TYPE_ATV'
+    };
+  };
+
+  /** The <video> that's playing. The page keeps more than one, and the others stay empty. */
+  const playingVideo = () => {
+    const videos = [...document.querySelectorAll('video')];
+    return videos.find(v => !v.paused && v.readyState >= 2) ||
+      videos.sort((a, b) => b.readyState - a.readyState || b.currentTime - a.currentTime)[0] || null;
+  };
+
+  /**
+   * Now Playing's Video tab: the playing video's frames, drawn into a canvas and sent to Swift as
+   * JPEGs (Player.videoFeed), one per frame the video presents, so it keeps its own frame rate. The
+   * stream is asked for in 720p while the tab is open, and frames are sent at up to 1280 × 720.
+   * The page itself stays hidden and untouched; moving the web view into the popover to show the
+   * video left it black (WebKit's video layer doesn't follow the view to another window).
+   */
+  let framesOn = false, watched = null, guardTimer = null;
+  const videoFrames = on => {
+    framesOn = on;
+    watched = null;
+    clearInterval(guardTimer);
+    const p = player();
+    try { if (p && p.setPlaybackQualityRange) p.setPlaybackQualityRange(on ? 'hd720' : 'auto', on ? 'hd720' : 'auto'); } catch (e) {}
+    if (!on) return;
+    const canvas = document.createElement('canvas');
+    const g = canvas.getContext('2d');
+    const send = v => {
+      if (!v.videoWidth || v.readyState < 2) return;
+      const h = Math.min(v.videoHeight, 720), w = Math.round(h * v.videoWidth / v.videoHeight);
+      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+      g.drawImage(v, 0, 0, w, h);
+      window.webkit.messageHandlers.ytmFrame.postMessage(canvas.toDataURL('image/jpeg', 0.8));
+    };
+    // One frame per frame the video presents; a paused video still shows the frame it's on.
+    const follow = v => {
+      watched = v;
+      send(v);
+      if (!v.requestVideoFrameCallback) return;
+      const next = () => {
+        if (!framesOn || watched !== v) return;
+        send(v);
+        v.requestVideoFrameCallback(next);
+      };
+      v.requestVideoFrameCallback(next);
+    };
+    // Picks up a new <video> if the player swaps it (and sends frames itself where there's no callback).
+    guardTimer = setInterval(() => {
+      const v = playingVideo();
+      if (v && v !== watched) follow(v);
+      else if (v && !v.requestVideoFrameCallback) send(v);
+    }, 500);
+    const v = playingVideo();
+    if (v) follow(v);
   };
 
   /** The volume (0–100) and whether it's muted, from the player, else the <video> element. */
@@ -720,7 +935,11 @@
       listId: nowPlayingList(),
       likeStatus: (like && like.getAttribute('like-status')) || 'INDIFFERENT',
       autoplay: autoplayOn(),
+      signedIn: !!(window.ytcfg && ytcfg.get('LOGGED_IN')),
       ...volumeState(),
+      ...adState(),
+      ...avState(),
+      repeat: (document.querySelector('ytmusic-player-bar') || { getAttribute: () => null }).getAttribute('repeat-mode') || 'NONE',
       ...currentTrackLinks(videoId)
     });
   };
@@ -737,7 +956,7 @@
   setInterval(post, 1000); // when nothing is playing
 
   window.ytmBridge = {
-    search, browse, albumDetails, play, control,
+    search, browse, albumDetails, lyrics, account, searchSuggestions, queueMove, play, control, videoFrames,
     queue, queuePlay, queueRemove, queueClear, enqueue, setAutoplay,
     call, runEndpoint, addTargets
   };

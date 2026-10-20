@@ -61,6 +61,7 @@ final class SelfTest: NSObject, NSApplicationDelegate {
 
     private func run() async -> Int {
         check(await player.waitUntilReady(), "page loaded")
+        check(await waitUntil(5) { player.signedIn == false }, "reports signed out")
 
         await player.loadHome()
         let home = player.current?.items ?? []
@@ -84,11 +85,26 @@ final class SelfTest: NSObject, NSApplicationDelegate {
         await checkPlayback(song: song, songId: songId, results: results)
         await checkQueue(songId: songId, results: results)
         await checkMix(results)
+        await checkLyricsAndVideo()
 
         let before = player.title
+        if player.isAd { _ = await waitUntil(60) { !player.isAd } } // skipping is off during ads
         player.next()
         check(await waitUntil(5) { player.title != before }, "next ('\(player.title)')")
         return failures
+    }
+
+    /// Lyrics (for a song known to have synced ones) and the Video tab's frames.
+    private func checkLyricsAndVideo() async {
+        let lyrics = try? await player.bridge(Lyrics.self, "lyrics", "_jTBSNbX8V8")
+        check(lyrics?.isSynced == true, "synced lyrics: \(lyrics?.lines.count ?? 0) lines (\(lyrics?.source ?? "-"))")
+        check(await waitUntil(10) { !player.lyricsLoading },
+              "playing song's lyrics looked up (\(player.lyrics.map { $0.isSynced ? "synced" : "plain" } ?? "none"))")
+
+        player.streamVideo(true)
+        check(await waitUntil(8) { player.videoFeed.frame != nil }, "video tab gets frames")
+        player.streamVideo(false)
+        report("info  song/video switch \(player.hasVideoVersion ? "offered" : "not offered") for '\(player.title)'")
     }
 
     private func checkShareLinks(_ results: [SearchItem]) {

@@ -27,18 +27,21 @@ enum Rating: String, Codable {
 struct SearchItem: Codable, Identifiable, Hashable {
     var id: String
     var section: String
-    var style: String?            // "card" for carousel/grid tiles, else a list row
+    var style: String?            // "card" for carousel/grid tiles, "category" for coloured tiles, else a row
     var title: String
     var subtitle: String
     var segments: [Segment]?      // the subtitle in pieces, some linking to an artist/album/creator
     var thumbnail: String?
     var explicit: Bool?
+    var color: String?            // a category tile's colour, "#RRGGBB"
+    var description: String?      // a podcast episode's summary
 
     // What it is and what it plays.
     var videoId: String?
     var playlistId: String?
     var browseId: String?
     var pageType: String?
+    var params: String?           // what the page it opens needs besides its id (category tiles)
     var playEndpoint: String?     // the web app's own requests (JSON), replayed verbatim
     var mixEndpoint: String?
 
@@ -58,6 +61,7 @@ struct SearchItem: Codable, Identifiable, Hashable {
 
     var isArtist: Bool { pageType == PageType.artist || pageType == PageType.libraryArtist }
     var isCard: Bool { style == "card" }
+    var isCategory: Bool { style == "category" }
 
     /// Its public YouTube Music link, for sharing.
     var shareURL: URL? {
@@ -68,6 +72,8 @@ struct SearchItem: Codable, Identifiable, Hashable {
     var isBrowsable: Bool { videoId == nil && browseId != nil }
     /// Can be played, queued or added to the library.
     var hasActions: Bool { videoId != nil || playlistId != nil }
+    /// Can go into Up Next: a song, album or playlist (an artist's shuffle list doesn't count).
+    var isQueueable: Bool { videoId != nil || (playlistId != nil && !isArtist) }
 }
 
 /// Public music.youtube.com links, which open for anyone (in a browser or the YouTube Music app).
@@ -143,12 +149,18 @@ struct Page: Codable {
     var inLibrary: Bool?
     var libraryAdd: String?
     var libraryRemove: String?
+    var channelId: String?         // artists: the channel to subscribe to
+    var subscribed: Bool?          // artists: nil when there's no Subscribe button
+    var subscribers: String?       // artists: e.g. "19.1m"
+    var suggestions: [String]?     // search pages: related searches
     var released: String?          // albums: release date, "yyyy-MM-dd" (loaded after the page)
     var label: String?             // albums: e.g. "2004 UMG Recordings, Inc."
 
     static let homeType = "home"
+    static let exploreType = "explore"
 
     var isHome: Bool { pageType == Self.homeType }
+    var isExplore: Bool { pageType == Self.exploreType }
     var isArtist: Bool { pageType == PageType.artist }
     var isLibrary: Bool { libraryTab != nil }
     var isLikedSongs: Bool { libraryTab == .likedSongs }
@@ -189,6 +201,8 @@ enum LibraryTab: String, CaseIterable, Codable {
     case albums = "Albums"
     case artists = "Artists"
     case history = "History"
+    case podcasts = "Podcasts"
+    case uploads = "Uploads"
 
     var browseId: String {
         switch self {
@@ -198,6 +212,8 @@ enum LibraryTab: String, CaseIterable, Codable {
         case .albums: "FEmusic_liked_albums"
         case .artists: "FEmusic_library_corpus_track_artists"
         case .history: "FEmusic_history"
+        case .podcasts: "FEmusic_library_non_music_audio_list"
+        case .uploads: "FEmusic_library_privately_owned_tracks"
         }
     }
 
@@ -212,6 +228,8 @@ enum LibraryTab: String, CaseIterable, Codable {
         case .albums: "square.stack"
         case .artists: "music.mic"
         case .history: "clock"
+        case .podcasts: "mic"
+        case .uploads: "icloud.and.arrow.up"
         }
     }
 }
@@ -244,4 +262,51 @@ struct QueueItem: Codable, Identifiable, Hashable {
     }
 
     var id: Int { index }
+}
+
+/// The signed-in account, for the profile button.
+struct Account: Decodable, Equatable {
+    let name: String
+    let handle: String?
+    let photo: String?
+    let channelId: String? // your profile page
+}
+
+/// A song's lyrics: timed lines where YouTube Music has them synced, else just the text.
+struct Lyrics: Decodable, Equatable {
+    struct Line: Decodable, Equatable {
+        let time: Double // seconds from the start
+        let text: String
+    }
+
+    let lines: [Line]
+    let text: String?
+    let source: String? // e.g. "Source: Musixmatch"
+
+    var isSynced: Bool { !lines.isEmpty }
+    var isEmpty: Bool { lines.isEmpty && text.nonEmpty == nil }
+
+    /// The line being sung at `time`: the last one that has started. Nil before the first.
+    func lineIndex(at time: Double) -> Int? {
+        var low = 0, high = lines.count
+        while low < high {
+            let mid = (low + high) / 2
+            if lines[mid].time <= time { low = mid + 1 } else { high = mid }
+        }
+        return low == 0 ? nil : low - 1
+    }
+}
+
+/// YouTube Music's repeat setting, as its player bar reports it.
+enum RepeatMode: String {
+    case off = "NONE", all = "ALL", one = "ONE"
+
+    var symbol: String { self == .one ? "repeat.1" : "repeat" }
+    var help: String {
+        switch self {
+        case .off: "Repeat off"
+        case .all: "Repeat all"
+        case .one: "Repeat one"
+        }
+    }
 }

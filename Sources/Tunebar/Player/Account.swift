@@ -198,6 +198,20 @@ extension Player {
         }
     }
 
+    // MARK: Subscriptions
+
+    /// Subscribes to an artist's channel, or unsubscribes.
+    func setSubscribed(_ page: Page, _ subscribe: Bool) {
+        guard let channelId = page.channelId else { return }
+        Task {
+            await perform(subscribe ? "Subscribed to \(page.title ?? "artist")" : "Unsubscribed") {
+                try await callAPI(subscribe ? "subscription/subscribe" : "subscription/unsubscribe",
+                                  ["channelIds": [channelId]])
+                for i in stack.indices where stack[i].channelId == channelId { stack[i].subscribed = subscribe }
+            }
+        }
+    }
+
     // MARK: Playlists
 
     /// Your playlists, for "Add to Playlist". The lookup needs some video id; any will do.
