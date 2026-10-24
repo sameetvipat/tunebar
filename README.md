@@ -12,7 +12,7 @@
 ## Features
 
 - Home, Explore, search, artists, albums, playlists, podcasts and your library
-- Now Playing with a Song / Video switch and time-synced lyrics
+- Now Playing with a Song / Video switch and time-synced lyrics (which YT Music doesn't provide on their web version)
 - Up Next: reorder, shuffle, repeat, Autoplay
 - Media keys and Control Center
 - Likes, playlists and subscriptions, right from the menu bar
